@@ -14,27 +14,31 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+# gdg_ai_lms/urls.py
 from django.contrib import admin
-from django.urls import path, include
-from django.http import JsonResponse
-
-def api_root(request):
-    return JsonResponse({
-        'message': 'Google AI Learning Platform API',
-        'endpoints': {
-            'auth': {
-                'login': '/api/auth/login/',
-                'signup': '/api/auth/signup/',
-                'logout': '/api/auth/logout/',
-                'profile': '/api/auth/profile/',
-                'change_password': '/api/auth/change-password/',
-            }
-        },
-        'status': 'active'
-    })
+from django.urls import path, include, re_path
+from django.views.generic import TemplateView
+from django.conf import settings
+from django.conf.urls.static import static
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    # Django admin (built-in)
+    path('django-admin/', admin.site.urls),
+    
+    # Regular user API routes
     path('api/', include('base.urls')),
-    path('', api_root, name='api-root'),
+    
+    # Admin API routes (separate namespace)
+    path('api/admin/', include('adminapp.urls')),
+    
+    # Admin frontend routes
+    path('admin/', TemplateView.as_view(template_name='index.html')),  # Admin frontend
+    path('admin/<path:path>', TemplateView.as_view(template_name='index.html')),
+    
+    # Catch-all route for main React app - must be LAST
+    re_path(r'^.*$', TemplateView.as_view(template_name='index.html')),
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

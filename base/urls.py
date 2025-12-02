@@ -33,4 +33,10 @@ urlpatterns = [
     path('community/mentors/', views.mentors_list, name='mentors-list'),
     path('community/discussions/', views.discussions_list, name='discussions-list'),
     path('community/events/', views.events_list, name='events-list'),
+
+    path('settings/', views.user_settings, name='user-settings'),
+    path('settings/profile/', views.update_profile, name='update-profile'),
+
+    path('debug-middleware/', views.debug_middleware, name='debug-middleware'),
+
 ]

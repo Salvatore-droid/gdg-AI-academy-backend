@@ -5,25 +5,65 @@ import bcrypt
 import jwt
 from datetime import datetime, timedelta
 from django.conf import settings
+from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 
+class UserManager(BaseUserManager):
+    def create_user(self, email, password=None, **extra_fields):
+        if not email:
+            raise ValueError('The Email field must be set')
+        email = self.normalize_email(email)
+        user = self.model(email=email, **extra_fields)
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
 
-class User(models.Model):
+    def create_superuser(self, email, password=None, **extra_fields):
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+        extra_fields.setdefault('is_active', True)
+
+        if extra_fields.get('is_staff') is not True:
+            raise ValueError('Superuser must have is_staff=True.')
+        if extra_fields.get('is_superuser') is not True:
+            raise ValueError('Superuser must have is_superuser=True.')
+
+        return self.create_user(email, password, **extra_fields)
+
+class User(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
-    password_hash = models.TextField()
+    password_hash = models.TextField(blank=True, null=True)  # Make optional for Django auth
     full_name = models.CharField(max_length=255)
+    bio = models.TextField(blank=True, null=True)
+    
+    # REQUIRED FOR DJANGO ADMIN
+    is_staff = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    
+    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    is_active = models.BooleanField(default=True)
     last_login = models.DateTimeField(null=True, blank=True)
 
+    objects = UserManager()
+
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['full_name']
+
     def set_password(self, password):
-        """Hash and set password"""
+        """Hash and set password for both systems"""
+        # For Django auth
+        super().set_password(password)
+        # For your custom system
         salt = bcrypt.gensalt()
         self.password_hash = bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
 
     def check_password(self, password):
-        """Verify password"""
+        """Check password for both systems"""
+        # Try Django auth first
+        if super().check_password(password):
+            return True
+        # Fall back to your custom system
         if not self.password_hash:
             return False
         try:
@@ -42,7 +82,7 @@ class User(models.Model):
 
     def update_last_login(self):
         """Update last login timestamp"""
-        self.last_login = datetime.now()
+        self.last_login = timezone.now()
         self.save()
 
     def __str__(self):
@@ -329,63 +369,87 @@ class Mentor(models.Model):
     class Meta:
         db_table = 'mentors'
 
+
+
+class UserSettings(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, primary_key=True, related_name='settings')
+    email_notifications = models.BooleanField(default=True)
+    push_notifications = models.BooleanField(default=True)
+    weekly_digest = models.BooleanField(default=True)
+    profile_visibility = models.BooleanField(default=True)
+    show_progress = models.BooleanField(default=True)
+    dark_mode = models.BooleanField(default=False)
+    language = models.CharField(max_length=10, default='en-US')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'user_settings'
+
+from django.db import models
+
 class Discussion(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('reported', 'Reported'),
+        ('locked', 'Locked'),
+        ('archived', 'Archived'),
+    ]
+    
     title = models.CharField(max_length=255)
     content = models.TextField()
     author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='discussions')
-    tags = models.JSONField(default=list)
+    course = models.ForeignKey('Course', on_delete=models.SET_NULL, null=True, blank=True, related_name='discussions')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    is_flagged = models.BooleanField(default=False)
+    flag_reason = models.TextField(blank=True)
     replies_count = models.IntegerField(default=0)
-    likes_count = models.IntegerField(default=0)
     views_count = models.IntegerField(default=0)
-    is_pinned = models.BooleanField(default=False)
-    is_closed = models.BooleanField(default=False)
+    likes_count = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = 'discussions'
-        ordering = ['-created_at']
+    last_activity_at = models.DateTimeField(auto_now=True)
 
 class DiscussionReply(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     discussion = models.ForeignKey(Discussion, on_delete=models.CASCADE, related_name='replies')
     author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='discussion_replies')
     content = models.TextField()
-    likes_count = models.IntegerField(default=0)
-    is_solution = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    class Meta:
-        db_table = 'discussion_replies'
-        ordering = ['created_at']
-
 class CommunityEvent(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    STATUS_CHOICES = [
+        ('upcoming', 'Upcoming'),
+        ('ongoing', 'Ongoing'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
+    EVENT_TYPES = [
+        ('workshop', 'Workshop'),
+        ('webinar', 'Webinar'),
+        ('meetup', 'Meetup'),
+        ('study_group', 'Study Group'),
+        ('guest_speaker', 'Guest Speaker'),
+    ]
+    
     title = models.CharField(max_length=255)
     description = models.TextField()
-    event_date = models.DateField()
-    event_time = models.TimeField()
-    duration_minutes = models.IntegerField(default=60)
+    event_type = models.CharField(max_length=50, choices=EVENT_TYPES)
+    start_date = models.DateTimeField(blank=True, null=True)
+    end_date = models.DateTimeField(blank=True, null=True)
+    max_attendees = models.IntegerField(default=100)
     host = models.ForeignKey(User, on_delete=models.CASCADE, related_name='hosted_events')
-    max_attendees = models.IntegerField(default=50)
-    event_type = models.CharField(
-        max_length=20,
-        choices=[
-            ('workshop', 'Workshop'),
-            ('webinar', 'Webinar'),
-            ('panel', 'Panel Discussion'),
-            ('qna', 'Q&A Session'),
-        ],
-        default='workshop'
-    )
-    is_active = models.BooleanField(default=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='upcoming')
+    location = models.CharField(max_length=255, blank=True, null=True)
+    is_virtual = models.BooleanField(default=False)
+    meeting_link = models.URLField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        db_table = 'community_events'
-        ordering = ['event_date', 'event_time']
+class EventAttendance(models.Model):
+    event = models.ForeignKey(CommunityEvent, on_delete=models.CASCADE, related_name='attendees')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='event_attendance')
+    joined_at = models.DateTimeField(auto_now_add=True)
+
 
 class EventRegistration(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

@@ -8,7 +8,24 @@ from django.db.models import Sum
 from django.http import HttpResponse
 from datetime import timedelta
 
+# base/views.py
+from django.http import JsonResponse
+from django.contrib.auth import get_user_model
 
+def debug_middleware(request):
+    """Debug view to check middleware and authentication"""
+    User = get_user_model()
+    
+    debug_info = {
+        'request.user': str(request.user),
+        'request.user type': type(request.user).__name__,
+        'is_authenticated': request.user.is_authenticated if hasattr(request.user, 'is_authenticated') else 'NO',
+        'session_exists': hasattr(request, 'session'),
+        'session_keys': list(request.session.keys()) if hasattr(request, 'session') else 'NO_SESSION',
+        'middleware_classes': [str(mw) for mw in request.META.get('MIDDLEWARE', [])],
+    }
+    
+    return JsonResponse(debug_info)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -1203,6 +1220,131 @@ def events_list(request):
             })
         
         return Response(events_data, status=status.HTTP_200_OK)
+        
+    except UserSession.DoesNotExist:
+        return Response(
+            {'error': 'Invalid token'},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+
+
+@api_view(['GET', 'PUT'])
+def user_settings(request):
+    """Get or update user settings"""
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return Response(
+            {'error': 'Authentication required'},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+    
+    token = auth_header.split(' ')[1]
+    try:
+        session = UserSession.objects.get(token=token, is_active=True)
+        if not session.is_valid():
+            return Response(
+                {'error': 'Invalid token'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        user = session.user
+        
+        if request.method == 'GET':
+            # Get or create user settings
+            settings, created = UserSettings.objects.get_or_create(user=user)
+            return Response({
+                'email_notifications': settings.email_notifications,
+                'push_notifications': settings.push_notifications,
+                'weekly_digest': settings.weekly_digest,
+                'profile_visibility': settings.profile_visibility,
+                'show_progress': settings.show_progress,
+                'dark_mode': settings.dark_mode,
+                'language': settings.language,
+            }, status=status.HTTP_200_OK)
+        
+        elif request.method == 'PUT':
+            # Update user settings
+            settings, created = UserSettings.objects.get_or_create(user=user)
+            data = request.data
+            
+            if 'email_notifications' in data:
+                settings.email_notifications = data['email_notifications']
+            if 'push_notifications' in data:
+                settings.push_notifications = data['push_notifications']
+            if 'weekly_digest' in data:
+                settings.weekly_digest = data['weekly_digest']
+            if 'profile_visibility' in data:
+                settings.profile_visibility = data['profile_visibility']
+            if 'show_progress' in data:
+                settings.show_progress = data['show_progress']
+            if 'dark_mode' in data:
+                settings.dark_mode = data['dark_mode']
+            if 'language' in data:
+                settings.language = data['language']
+            
+            settings.save()
+            
+            return Response({
+                'message': 'Settings updated successfully',
+                'settings': {
+                    'email_notifications': settings.email_notifications,
+                    'push_notifications': settings.push_notifications,
+                    'weekly_digest': settings.weekly_digest,
+                    'profile_visibility': settings.profile_visibility,
+                    'show_progress': settings.show_progress,
+                    'dark_mode': settings.dark_mode,
+                    'language': settings.language,
+                }
+            }, status=status.HTTP_200_OK)
+        
+    except UserSession.DoesNotExist:
+        return Response(
+            {'error': 'Invalid token'},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+
+@api_view(['PUT'])
+def update_profile(request):
+    """Update user profile"""
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return Response(
+            {'error': 'Authentication required'},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+    
+    token = auth_header.split(' ')[1]
+    try:
+        session = UserSession.objects.get(token=token, is_active=True)
+        if not session.is_valid():
+            return Response(
+                {'error': 'Invalid token'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        user = session.user
+        data = request.data
+        
+        if 'full_name' in data:
+            user.full_name = data['full_name']
+        if 'bio' in data:
+            # Add bio field to User model if not exists
+            if hasattr(user, 'bio'):
+                user.bio = data['bio']
+        
+        user.save()
+        
+        return Response({
+            'message': 'Profile updated successfully',
+            'user': {
+                'id': str(user.id),
+                'email': user.email,
+                'full_name': user.full_name,
+                'bio': getattr(user, 'bio', ''),
+                'created_at': user.created_at.isoformat(),
+                'last_login': user.last_login.isoformat() if user.last_login else None,
+            }
+        }, status=status.HTTP_200_OK)
         
     except UserSession.DoesNotExist:
         return Response(
