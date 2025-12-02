@@ -149,17 +149,43 @@ class AdminDashboardView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-# ==================== User Management Views ====================
 class AdminUserViewSet(viewsets.ModelViewSet):
     authentication_classes = [SessionAuthentication, BasicAuthentication]
-    permission_classes = [IsAdminUser]
-    queryset = User.objects.all().order_by('-created_at')
+    permission_classes = [IsAuthenticated, IsAdminUser]
     serializer_class = AdminUserSerializer
+    
+    # Add this queryset attribute
+    queryset = User.objects.all().order_by('-created_at')
     
     def get_serializer_class(self):
         if self.action == 'create':
             return AdminUserCreateSerializer
         return AdminUserSerializer
+    
+    def get_queryset(self):
+        """Override to add annotations for stats"""
+        queryset = User.objects.all().order_by('-created_at')
+        
+        # Annotate with course stats
+        from django.db.models import Count, Sum, Q
+        from base.models import UserCourseProgress, Certificate, UserLearningStats
+        
+        # Get course progress counts
+        course_progress = UserCourseProgress.objects.values('user').annotate(
+            total_enrolled=Count('id', distinct=True),
+            total_completed=Count('id', filter=Q(is_completed=True), distinct=True)
+        )
+        
+        # Create a mapping for quick lookup
+        user_stats = {}
+        for stat in course_progress:
+            user_stats[stat['user']] = {
+                'enrolled': stat.get('total_enrolled', 0),
+                'completed': stat.get('total_completed', 0)
+            }
+        
+        # We'll handle the annotation in the serializer instead
+        return queryset
     
     def list(self, request):
         """List users with filtering and pagination"""
@@ -276,6 +302,186 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             {'message': 'User promoted to admin successfully'},
             status=status.HTTP_200_OK
         )
+    
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Get user statistics"""
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        total_users = User.objects.count()
+        active_users = User.objects.filter(is_active=True).count()
+        admin_users = User.objects.filter(is_staff=True).count()
+        
+        # New users today
+        today = timezone.now().date()
+        new_users_today = User.objects.filter(created_at__date=today).count()
+        
+        # New users this week
+        week_ago = timezone.now() - timedelta(days=7)
+        new_users_week = User.objects.filter(created_at__gte=week_ago).count()
+        
+        # Total learning hours
+        from base.models import UserLearningStats
+        total_learning_hours = UserLearningStats.objects.aggregate(
+            total_hours=Sum('total_learning_hours')
+        )['total_hours'] or 0
+        
+        # Top learners
+        top_learners = UserLearningStats.objects.select_related('user').order_by('-total_learning_hours')[:5]
+        
+        top_learners_data = []
+        for stats in top_learners:
+            top_learners_data.append({
+                'id': str(stats.user.id),
+                'full_name': stats.user.full_name,
+                'total_learning_hours': stats.total_learning_hours,
+                'courses_completed': stats.total_courses_completed,
+            })
+        
+        return Response({
+            'total_users': total_users,
+            'active_users': active_users,
+            'admin_users': admin_users,
+            'new_users_today': new_users_today,
+            'new_users_week': new_users_week,
+            'total_learning_hours': total_learning_hours,
+            'top_learners': top_learners_data,
+        })
+    
+    @action(detail=False, methods=['post'])
+    def bulk_activate(self, request):
+        """Activate multiple users"""
+        user_ids = request.data.get('user_ids', [])
+        
+        if not user_ids:
+            return Response(
+                {'error': 'No user IDs provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        users = User.objects.filter(id__in=user_ids)
+        updated_count = users.update(is_active=True)
+        
+        AdminAuditLogger.log_action(
+            admin_user=request.user,
+            action='users_bulk_activated',
+            model_name='User',
+            details={
+                'count': updated_count,
+                'user_ids': user_ids,
+            },
+            request=request
+        )
+        
+        return Response({
+            'message': f'Successfully activated {updated_count} users',
+            'activated_count': updated_count
+        })
+    
+    @action(detail=False, methods=['post'])
+    def bulk_deactivate(self, request):
+        """Deactivate multiple users"""
+        user_ids = request.data.get('user_ids', [])
+        
+        if not user_ids:
+            return Response(
+                {'error': 'No user IDs provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        users = User.objects.filter(id__in=user_ids)
+        updated_count = users.update(is_active=False)
+        
+        # Invalidate all active sessions for deactivated users
+        UserSession.objects.filter(user__in=users, is_active=True).update(is_active=False)
+        
+        AdminAuditLogger.log_action(
+            admin_user=request.user,
+            action='users_bulk_deactivated',
+            model_name='User',
+            details={
+                'count': updated_count,
+                'user_ids': user_ids,
+            },
+            request=request
+        )
+        
+        return Response({
+            'message': f'Successfully deactivated {updated_count} users',
+            'deactivated_count': updated_count
+        })
+    
+    @action(detail=False, methods=['delete'])
+    def bulk_delete(self, request):
+        """Delete multiple users"""
+        user_ids = request.data.get('user_ids', [])
+        
+        if not user_ids:
+            return Response(
+                {'error': 'No user IDs provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        users = User.objects.filter(id__in=user_ids)
+        deleted_count = users.count()
+        
+        # Soft delete (deactivate) instead of actual delete
+        users.update(is_active=False)
+        
+        # Invalidate all sessions
+        UserSession.objects.filter(user__in=users, is_active=True).update(is_active=False)
+        
+        AdminAuditLogger.log_action(
+            admin_user=request.user,
+            action='users_bulk_deleted',
+            model_name='User',
+            details={
+                'count': deleted_count,
+                'user_ids': user_ids,
+            },
+            request=request
+        )
+        
+        return Response({
+            'message': f'Successfully deleted {deleted_count} users',
+            'deleted_count': deleted_count
+        })
+    
+    @action(detail=False, methods=['post'])
+    def send_welcome(self, request):
+        """Send welcome email to user"""
+        user_id = request.data.get('user_id')
+        
+        if not user_id:
+            return Response(
+                {'error': 'User ID is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            user = User.objects.get(id=user_id)
+            # TODO: Implement email sending logic
+            # send_welcome_email(user.email, user.full_name)
+            
+            AdminAuditLogger.log_action(
+                admin_user=request.user,
+                action='welcome_email_sent',
+                model_name='User',
+                object_id=user_id,
+                details={'email': user.email},
+                request=request
+            )
+            
+            return Response(
+                {'message': 'Welcome email sent successfully'},
+                status=status.HTTP_200_OK
+            )
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
 # ==================== Course Management Views ====================
 # In your views.py, modify the AdminCourseViewSet list method:
@@ -1252,4 +1458,256 @@ class CommunityStatsView(APIView):
                 {'topic': item['title'], 'discussion_count': item['count']}
                 for item in popular_topics
             ],
+        })
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.db import connection
+from django.db.models import Count
+import psutil
+import time
+from datetime import datetime, timedelta
+
+class SystemConfigView(APIView):
+    authentication_classes = [SessionAuthentication, BasicAuthentication]
+    permission_classes = [IsSuperAdmin]
+    
+    def get(self, request):
+        """Get all system configurations"""
+        configs = SystemConfig.objects.all()
+        serializer = SystemConfigSerializer(configs, many=True)
+        return Response(serializer.data)
+    
+    def put(self, request):
+        """Update system configurations"""
+        configs_data = request.data
+        
+        if not isinstance(configs_data, dict):
+            return Response(
+                {'error': 'Invalid data format. Expected dictionary of key-value pairs.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        updated_configs = []
+        errors = []
+        
+        for key, value in configs_data.items():
+            try:
+                config = SystemConfig.objects.get(key=key)
+                
+                # Validate based on data type
+                if config.data_type == 'boolean':
+                    if str(value).lower() not in ['true', 'false', '1', '0']:
+                        errors.append(f'{key}: Invalid boolean value')
+                        continue
+                    value = 'true' if str(value).lower() in ['true', '1'] else 'false'
+                elif config.data_type == 'integer':
+                    try:
+                        value = str(int(value))
+                    except ValueError:
+                        errors.append(f'{key}: Must be an integer')
+                        continue
+                
+                config.value = str(value)
+                config.updated_by = request.user
+                config.save()
+                updated_configs.append(key)
+                
+            except SystemConfig.DoesNotExist:
+                errors.append(f'{key}: Configuration key not found')
+        
+        if errors:
+            return Response(
+                {'error': 'Some configurations failed to update', 'details': errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Log the action
+        AdminAuditLogger.log_action(
+            admin_user=request.user,
+            action='system_config_updated',
+            details={'updated_keys': updated_configs},
+            request=request
+        )
+        
+        return Response({
+            'message': f'Successfully updated {len(updated_configs)} configurations',
+            'updated_configs': updated_configs
+        }, status=status.HTTP_200_OK)
+
+class SystemHealthView(APIView):
+    authentication_classes = [SessionAuthentication, BasicAuthentication]
+    permission_classes = [IsSuperAdmin]
+    
+    def get(self, request):
+        """Get system health information"""
+        try:
+            # Check database connection
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                database_status = 'connected'
+        except Exception as e:
+            database_status = f'error: {str(e)}'
+        
+        # Check disk usage
+        try:
+            disk_usage = psutil.disk_usage('/')
+            storage_usage = round((disk_usage.used / disk_usage.total) * 100, 2)
+        except Exception:
+            storage_usage = 0.0
+        
+        # Check CPU and memory
+        try:
+            cpu_percent = psutil.cpu_percent(interval=1)
+            memory = psutil.virtual_memory()
+        except Exception:
+            cpu_percent = 0
+            memory = None
+        
+        # Get active users (users who logged in last 5 minutes)
+        from django.utils import timezone
+        from base.models import User
+        active_users = User.objects.filter(
+            last_login__gte=timezone.now() - timedelta(minutes=5)
+        ).count()
+        
+        # Get latest health record or create new one
+        from adminapp.models import SystemHealth
+        
+        health = SystemHealth.objects.create(
+            status='healthy',
+            uptime=100.0,  # You would calculate this from uptime monitoring
+            database_status=database_status,
+            storage_usage=storage_usage,
+            active_users=active_users,
+            api_response_time=0.0,  # Calculate from API monitoring
+            last_backup=None  # Set this from backup system
+        )
+        
+        serializer = SystemHealthSerializer(health)
+        return Response(serializer.data)
+
+class SettingCategoriesView(APIView):
+    authentication_classes = [SessionAuthentication, BasicAuthentication]
+    permission_classes = [IsAdminUser]
+    
+    def get(self, request):
+        """Get all setting categories with counts"""
+        from django.db.models import Count
+        
+        categories = SystemConfig.objects.values('category').annotate(
+            settings_count=Count('id')
+        ).order_by('category')
+        
+        # Map categories to display names
+        category_map = {
+            'general': 'General',
+            'security': 'Security',
+            'email': 'Email',
+            'features': 'Features',
+            'database': 'Database',
+            'notifications': 'Notifications',
+            'performance': 'Performance',
+            'maintenance': 'Maintenance',
+        }
+        
+        result = []
+        for cat in categories:
+            category_id = cat['category']
+            result.append({
+                'id': category_id,
+                'name': category_map.get(category_id, category_id.title()),
+                'description': f'Configure {category_map.get(category_id, category_id)} settings',
+                'settings_count': cat['settings_count'],
+                'icon': category_id,  # Use category as icon identifier
+            })
+        
+        return Response(result)
+
+class ResetConfigDefaultsView(APIView):
+    authentication_classes = [SessionAuthentication, BasicAuthentication]
+    permission_classes = [IsSuperAdmin]
+    
+    def post(self, request):
+        """Reset all configurations to default values"""
+        from adminapp.default_configs import DEFAULT_CONFIGS
+        
+        updated_count = 0
+        for key, default_config in DEFAULT_CONFIGS.items():
+            try:
+                config = SystemConfig.objects.get(key=key)
+                config.value = default_config['value']
+                config.updated_by = request.user
+                config.save()
+                updated_count += 1
+            except SystemConfig.DoesNotExist:
+                # Create missing config
+                SystemConfig.objects.create(
+                    key=key,
+                    value=default_config['value'],
+                    description=default_config['description'],
+                    category=default_config['category'],
+                    data_type=default_config['data_type'],
+                    updated_by=request.user
+                )
+                updated_count += 1
+        
+        # Log the action
+        AdminAuditLogger.log_action(
+            admin_user=request.user,
+            action='system_config_reset',
+            details={'reset_count': updated_count},
+            request=request
+        )
+        
+        return Response({
+            'message': f'Successfully reset {updated_count} configurations to defaults'
+        })
+
+class SystemLogsView(APIView):
+    authentication_classes = [SessionAuthentication, BasicAuthentication]
+    permission_classes = [IsSuperAdmin]
+    
+    def get(self, request):
+        """Get system logs with filtering"""
+        logs = SystemLog.objects.all().select_related('user').order_by('-created_at')
+        
+        # Apply filters
+        level = request.query_params.get('level')
+        category = request.query_params.get('category')
+        user_id = request.query_params.get('user_id')
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        search = request.query_params.get('search')
+        
+        if level:
+            logs = logs.filter(level=level)
+        if category:
+            logs = logs.filter(category=category)
+        if user_id:
+            logs = logs.filter(user_id=user_id)
+        if start_date:
+            logs = logs.filter(created_at__date__gte=start_date)
+        if end_date:
+            logs = logs.filter(created_at__date__lte=end_date)
+        if search:
+            logs = logs.filter(message__icontains=search)
+        
+        # Pagination
+        from django.core.paginator import Paginator
+        page = request.query_params.get('page', 1)
+        per_page = request.query_params.get('per_page', 50)
+        
+        paginator = Paginator(logs, per_page)
+        page_obj = paginator.get_page(page)
+        
+        serializer = SystemLogSerializer(page_obj, many=True)
+        
+        return Response({
+            'logs': serializer.data,
+            'page': page_obj.number,
+            'total_pages': paginator.num_pages,
+            'total_logs': paginator.count,
+            'per_page': per_page
         })

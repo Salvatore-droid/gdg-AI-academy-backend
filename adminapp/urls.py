@@ -24,15 +24,19 @@ urlpatterns = [
     path('dashboard/', views.AdminDashboardView.as_view(), name='admin-dashboard'),
     path('dashboard/course-stats/', views.AdminCourseStatsView.as_view(), name='admin-course-stats'),
 
-    path('api/admin/modules/stats/', views.ModuleStatsView.as_view(), name='module-stats'),
+    path('modules/stats/', views.ModuleStatsView.as_view(), name='module-stats'),
 
-    path('api/admin/community/stats/', views.CommunityStatsView.as_view(), name='community-stats'),
+    path('community/stats/', views.CommunityStatsView.as_view(), name='community-stats'),
     
     # Analytics
     path('analytics/', views.AnalyticsView.as_view(), name='admin-analytics'),
     
     # System Management
     path('system/config/', views.SystemConfigView.as_view(), name='system-config'),
+    path('system/config/reset/', views.ResetConfigDefaultsView.as_view(), name='system-config-reset'),
+    path('system/health/', views.SystemHealthView.as_view(), name='system-health'),
+    path('system/categories/', views.SettingCategoriesView.as_view(), name='setting-categories'),
+    path('system/logs/', views.SystemLogsView.as_view(), name='system-logs'),
     path('system/audit-logs/', views.AuditLogView.as_view(), name='audit-logs'),
     
     # Include router URLs

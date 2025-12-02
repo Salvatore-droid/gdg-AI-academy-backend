@@ -252,3 +252,26 @@ class CommunityStatsSerializer(serializers.Serializer):
     upcoming_events = serializers.IntegerField()
     active_users = serializers.IntegerField()
     popular_topics = serializers.ListField(child=serializers.DictField())
+
+
+class SystemConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SystemConfig
+        fields = [
+            'id', 'key', 'value', 'description', 
+            'category', 'data_type', 'updated_at', 'updated_by'
+        ]
+        read_only_fields = ['id', 'updated_at', 'updated_by']
+
+class SystemHealthSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SystemHealth
+        fields = '__all__'
+
+class SystemLogSerializer(serializers.ModelSerializer):
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+    user_name = serializers.CharField(source='user.full_name', read_only=True)
+    
+    class Meta:
+        model = SystemLog
+        fields = '__all__'
