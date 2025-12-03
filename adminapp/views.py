@@ -17,9 +17,11 @@ from adminapp.models import AdminAuditLog, SystemConfig, CourseApproval
 from adminapp.serializers import *
 from adminapp.permissions import IsAdminUser, IsSuperAdmin
 from adminapp.utils import AdminAuditLogger, AdminStatsCalculator
-from rest_framework.authentication import SessionAuthentication, BasicAuthentication
+from rest_framework.authentication import SessionAuthentication, BasicAuthentication, TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 from datetime import timedelta
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 
 User = get_user_model()
 
@@ -123,7 +125,7 @@ class AdminProfileView(APIView):
 
 # ==================== Admin Dashboard Views ====================
 class AdminDashboardView(APIView):
-    authentication_classes = [SessionAuthentication, BasicAuthentication]
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated, IsAdminUser]
     
     
@@ -149,10 +151,16 @@ class AdminDashboardView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+from adminapp.authentication import CsrfExemptSessionAuthentication
+
 class AdminUserViewSet(viewsets.ModelViewSet):
-    authentication_classes = [SessionAuthentication, BasicAuthentication]
+    authentication_classes = [CsrfExemptSessionAuthentication, BasicAuthentication]
     permission_classes = [IsAuthenticated, IsAdminUser]
     serializer_class = AdminUserSerializer
+
+    # @method_decorator(csrf_exempt, name='dispatch')
+    # def dispatch(self, *args, **kwargs):
+    #     return super().dispatch(*args, **kwargs)
     
     # Add this queryset attribute
     queryset = User.objects.all().order_by('-created_at')
@@ -160,6 +168,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'create':
             return AdminUserCreateSerializer
+        elif self.action in ['update', 'partial_update']:
+            return AdminUserUpdateSerializer  # IMPORTANT: Use update serializer
         return AdminUserSerializer
     
     def get_queryset(self):
@@ -222,7 +232,9 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             'total_users': paginator.count,
             'per_page': per_page
         })
-    
+
+        
+    # @method_decorator(csrf_exempt)
     def create(self, request):
         """Create a new user (admin or regular)"""
         serializer = self.get_serializer(data=request.data)

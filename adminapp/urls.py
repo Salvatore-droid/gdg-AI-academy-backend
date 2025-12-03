@@ -19,6 +19,9 @@ urlpatterns = [
     path('auth/logout/', views.AdminLogoutView.as_view(), name='admin-logout'),
     # Make sure you have this in adminapp/urls.py
     path('auth/profile/', views.AdminProfileView.as_view(), name='admin-profile'),
+    path('api/admin/users/', views.AdminUserViewSet.as_view({'get': 'list','post': 'create'}), name='admin_users'),
+    path('api/admin/users/<uuid:pk>/', views.AdminUserViewSet.as_view({'get': 'retrieve','put': 'update','patch': 'partial_update','delete': 'destroy'}), name='admin_user_detail'),
+
     
     # Dashboard
     path('dashboard/', views.AdminDashboardView.as_view(), name='admin-dashboard'),

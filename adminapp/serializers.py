@@ -45,22 +45,68 @@ class AdminUserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
 class AdminUserCreateSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, style={'input_type': 'password'})
+    password = serializers.CharField(
+        write_only=True, 
+        style={'input_type': 'password'},
+        required=True
+    )
     
     class Meta:
         model = User
-        fields = ['email', 'full_name', 'password', 'is_staff', 'is_active']
+        fields = ['email', 'full_name', 'password', 'is_staff', 'is_active', 'bio']
     
     def create(self, validated_data):
-        user = User.objects.create_user(
+        """Create a new user with hashed password"""
+        password = validated_data.pop('password')
+        user = User.objects.create(
             email=validated_data['email'],
             full_name=validated_data['full_name'],
-            password=validated_data['password']
+            is_staff=validated_data.get('is_staff', False),
+            is_active=validated_data.get('is_active', True),
+            bio=validated_data.get('bio', '')
         )
-        user.is_staff = validated_data.get('is_staff', False)
-        user.is_active = validated_data.get('is_active', True)
+        user.set_password(password)  # This hashes the password
         user.save()
         return user
+
+class AdminUserUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating users with password handling"""
+    password = serializers.CharField(
+        write_only=True, 
+        required=False, 
+        allow_blank=True,
+        style={'input_type': 'password'},
+        help_text="Leave blank to keep current password"
+    )
+    
+    class Meta:
+        model = User
+        fields = ['email', 'full_name', 'password', 'is_staff', 'is_active', 'bio']
+    
+    def update(self, instance, validated_data):
+        """Update user with password handling"""
+        print(f"=== AdminUserUpdateSerializer.update() ===")
+        print(f"Updating user: {instance.email}")
+        print(f"Validated data keys: {list(validated_data.keys())}")
+        
+        # Handle password update
+        password = validated_data.pop('password', None)
+        
+        if password is not None:  # Check if password field was sent
+            if password:  # Check if password is not empty
+                print(f"Setting new password for {instance.email}")
+                instance.set_password(password)  # This hashes the password
+            else:
+                print(f"Password field empty, keeping current password")
+        
+        # Update other fields
+        for attr, value in validated_data.items():
+            print(f"Setting {attr} = {value}")
+            setattr(instance, attr, value)
+        
+        instance.save()
+        print(f"User saved successfully")
+        return instance
 
 # Course Management Serializers
 class AdminCourseSerializer(serializers.ModelSerializer):
@@ -129,9 +175,13 @@ class AdminDashboardStatsSerializer(serializers.Serializer):
         fields = '__all__'
 
 
-# adminapp/serializers.py - Add these serializers
+# adminapp/serializers.py - Update CourseCreateUpdateSerializer
+
 class CourseCreateUpdateSerializer(serializers.ModelSerializer):
     """Serializer for creating and updating courses"""
+    instructor = serializers.CharField(required=False, allow_blank=True)
+    thumbnail = serializers.CharField(required=False, allow_blank=True)
+    
     class Meta:
         model = Course
         fields = [
@@ -143,7 +193,16 @@ class CourseCreateUpdateSerializer(serializers.ModelSerializer):
             'description': {'required': True},
             'category': {'required': True},
             'difficulty': {'required': True},
+            'duration_minutes': {'required': True},
         }
+    
+    def create(self, validated_data):
+        """Create course with default values"""
+        # Set default values if not provided
+        if 'instructor' not in validated_data or not validated_data['instructor']:
+            validated_data['instructor'] = 'Admin Instructor'
+        
+        return super().create(validated_data)
 
 class CourseDetailSerializer(serializers.ModelSerializer):
     """Detailed course serializer for admin"""

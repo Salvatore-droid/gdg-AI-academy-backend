@@ -1,67 +1,62 @@
-from django.http import JsonResponse
-from base.models import UserSession
-from django.utils import timezone
+# adminapp/middleware.py
 
-class AdminAuthenticationMiddleware:
+from django.utils.deprecation import MiddlewareMixin
+from base.models import UserSession
+
+class AdminAuthenticationMiddleware(MiddlewareMixin):
     """
-    Middleware to authenticate admin requests
+    Middleware to authenticate admin requests for DRF.
+    Sets request.user but lets DRF handle the responses.
     """
-    def __init__(self, get_response):
-        self.get_response = get_response
-        self.admin_paths = [
-            '/api/admin/',
-            '/admin-api/',
-        ]
-    
-    def __call__(self, request):
+    def process_request(self, request):
         # Check if request is for admin endpoints
-        is_admin_path = any(request.path.startswith(path) for path in self.admin_paths)
-        
-        # Allow login and logout endpoints without authentication
-        if request.path in ['/api/admin/auth/login/', '/api/admin/auth/logout/']:
-            return self.get_response(request)
-        
-        if is_admin_path:
+        if request.path.startswith('/api/admin/'):
+            print(f"=== AdminAuthenticationMiddleware ===")
+            print(f"Path: {request.path}")
+            print(f"Method: {request.method}")
+            
+            # Skip for login and logout endpoints
+            if request.path in ['/api/admin/auth/login/', '/api/admin/auth/logout/']:
+                print("Skipping authentication for login/logout")
+                return None
+            
             # Extract token
             auth_header = request.headers.get('Authorization', '')
             token = None
             
             if auth_header.startswith('Bearer '):
                 token = auth_header.split(' ')[1]
+                print(f"Token from Authorization header: {token[:20]}...")
             elif 'admin_token' in request.COOKIES:
                 token = request.COOKIES.get('admin_token')
+                print(f"Token from cookie: {token[:20]}...")
             
             if token:
                 try:
                     session = UserSession.objects.get(token=token, is_active=True)
+                    print(f"Found session for user: {session.user.email}")
+                    
                     if session.is_valid():
                         user = session.user
                         if user.is_staff:
+                            # Set user on request - THIS IS CRITICAL
                             request.user = user
+                            request._cached_user = user  # Cache for performance
                             request.admin_session = session
-                            # Continue to the view
-                            return self.get_response(request)
+                            print(f"User set on request: {request.user.email}")
+                            print(f"Is staff: {request.user.is_staff}")
                         else:
-                            return JsonResponse(
-                                {'error': 'Admin access required'}, 
-                                status=403
-                            )
+                            print(f"User {user.email} is not staff")
+                            # Don't return response, let DRF handle it
+                            request.user = user  # Still set user
                     else:
+                        print("Session invalid")
                         session.invalidate()
-                        return JsonResponse(
-                            {'error': 'Session expired'}, 
-                            status=401
-                        )
                 except UserSession.DoesNotExist:
-                    return JsonResponse(
-                        {'error': 'Invalid authentication token'}, 
-                        status=401
-                    )
+                    print(f"No session found for token: {token[:20]}...")
             else:
-                return JsonResponse(
-                    {'error': 'Authentication required'}, 
-                    status=401
-                )
+                print("No token found in request")
+            
+            print("===")
         
-        response = self.get_response(request)
-        return response
+        return None  # Continue to next middleware/view
