@@ -498,11 +498,19 @@ class AdminUserViewSet(viewsets.ModelViewSet):
 # ==================== Course Management Views ====================
 # In your views.py, modify the AdminCourseViewSet list method:
 
+# adminapp/views.py - Update AdminCourseViewSet
+
+from adminapp.authentication import CsrfExemptSessionAuthentication
+
 class AdminCourseViewSet(viewsets.ModelViewSet):
-    authentication_classes = [SessionAuthentication, BasicAuthentication]
-    permission_classes = [IsAdminUser]
+    authentication_classes = [CsrfExemptSessionAuthentication, BasicAuthentication]
+    permission_classes = [IsAuthenticated, IsAdminUser]
     queryset = Course.objects.all().order_by('-created_at')
-    serializer_class = AdminCourseSerializer
+    
+    def get_serializer_class(self):
+        if self.action in ['create', 'update', 'partial_update']:
+            return CourseCreateUpdateSerializer
+        return AdminCourseSerializer
     
     def list(self, request):
         """List courses with statistics"""
@@ -516,17 +524,15 @@ class AdminCourseViewSet(viewsets.ModelViewSet):
         
         # Apply filters
         is_active = request.query_params.get('is_active')
-        is_staff = request.query_params.get('is_staff')
         search = request.query_params.get('search')
         
         if is_active is not None:
             queryset = queryset.filter(is_active=is_active.lower() == 'true')
-        if is_staff is not None:
-            queryset = queryset.filter(is_staff=is_staff.lower() == 'true')
         if search:
             queryset = queryset.filter(
                 Q(title__icontains=search) |
-                Q(description__icontains=search)
+                Q(description__icontains=search) |
+                Q(instructor__icontains=search)
             )
         
         # Pagination
@@ -536,13 +542,36 @@ class AdminCourseViewSet(viewsets.ModelViewSet):
         paginator = Paginator(queryset, per_page)
         page_obj = paginator.get_page(page)
         
-        serializer = self.get_serializer(page_obj, many=True)
-        
-        # Add course statistics to each course
+        # Calculate stats for each course
         courses_with_stats = []
         for course in page_obj:
-            course_data = serializer.data
-            # You'll need to fetch these from your serializer or calculate here
+            # Get enrolled students count
+            enrolled_students = UserCourseProgress.objects.filter(course=course).count()
+            
+            # Get modules count
+            modules_count = CourseModule.objects.filter(course=course).count()
+            
+            # Calculate completion rate
+            total_enrolled = enrolled_students
+            completed = UserCourseProgress.objects.filter(course=course, is_completed=True).count()
+            completion_rate = (completed / total_enrolled * 100) if total_enrolled > 0 else 0
+            
+            course_data = {
+                'id': str(course.id),
+                'title': course.title,
+                'description': course.description,
+                'category': course.category,
+                'difficulty': course.difficulty,
+                'instructor': course.instructor,
+                'duration_minutes': course.duration_minutes,
+                'thumbnail': course.thumbnail,
+                'is_active': course.is_active,
+                'created_at': course.created_at,
+                'updated_at': course.updated_at,
+                'enrolled_students': enrolled_students,
+                'modules_count': modules_count,
+                'completion_rate': round(completion_rate, 1)
+            }
             courses_with_stats.append(course_data)
         
         return Response({
@@ -552,6 +581,50 @@ class AdminCourseViewSet(viewsets.ModelViewSet):
             'total_courses': paginator.count,
             'per_page': per_page
         })
+    
+    def create(self, request):
+        """Create a new course"""
+        print(f"=== AdminCourseViewSet.create() ===")
+        print(f"Request user: {request.user.email}")
+        print(f"Request data: {request.data}")
+        
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            print("Serializer is valid")
+            try:
+                course = serializer.save()
+                print(f"Course created: {course.title}")
+                
+                # Log the action
+                AdminAuditLogger.log_action(
+                    admin_user=request.user,
+                    action='course_created',
+                    model_name='Course',
+                    object_id=course.id,
+                    details={
+                        'title': course.title,
+                        'category': course.category,
+                    },
+                    request=request
+                )
+                
+                return Response(
+                    AdminCourseSerializer(course).data,
+                    status=status.HTTP_201_CREATED
+                )
+            except Exception as e:
+                print(f"Error creating course: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return Response(
+                    {'error': f'Failed to create course: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+        else:
+            print(f"Serializer errors: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    # ... rest of your existing actions ...
     
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
@@ -850,23 +923,35 @@ class AnalyticsView(APIView):
         })
 
 # ==================== Course Module Management Views ====================
+# adminapp/views.py - Update AdminCourseModuleViewSet
+
+from adminapp.authentication import CsrfExemptSessionAuthentication
+
 class AdminCourseModuleViewSet(viewsets.ModelViewSet):
-    authentication_classes = [SessionAuthentication, BasicAuthentication]
-    permission_classes = [IsAdminUser]
+    authentication_classes = [CsrfExemptSessionAuthentication, BasicAuthentication]
+    permission_classes = [IsAuthenticated, IsAdminUser]
     serializer_class = AdminCourseModuleSerializer
 
     def get_queryset(self):
-        return CourseModule.objects.filter(
-            course_id=self.kwargs.get('course_pk')
-        ).select_related('course').order_by('order')
+        """Get modules for a specific course"""
+        course_pk = self.kwargs.get('course_pk')
+        if course_pk:
+            return CourseModule.objects.filter(
+                course_id=course_pk
+            ).select_related('course').order_by('order')
+        return CourseModule.objects.none()
     
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
             return CourseModuleCreateSerializer
-        return CourseModuleSerializer
+        return AdminCourseModuleSerializer
     
     def list(self, request, course_pk=None):
         """List all modules for a specific course"""
+        print(f"=== AdminCourseModuleViewSet.list() ===")
+        print(f"Course ID: {course_pk}")
+        print(f"Request user: {request.user.email}")
+        
         try:
             course = Course.objects.get(id=course_pk)
         except Course.DoesNotExist:
@@ -882,12 +967,19 @@ class AdminCourseModuleViewSet(viewsets.ModelViewSet):
             'course': {
                 'id': str(course.id),
                 'title': course.title,
+                'description': course.description,
             },
-            'modules': serializer.data
+            'modules': serializer.data,
+            'total_modules': modules.count(),
         })
     
     def create(self, request, course_pk=None):
         """Create a new module for a course"""
+        print(f"=== AdminCourseModuleViewSet.create() ===")
+        print(f"Course ID: {course_pk}")
+        print(f"Request user: {request.user.email}")
+        print(f"Request data: {request.data}")
+        
         try:
             course = Course.objects.get(id=course_pk)
         except Course.DoesNotExist:
@@ -896,9 +988,18 @@ class AdminCourseModuleViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        serializer = self.get_serializer(data=request.data)
+        # Add course_id to request data
+        data = request.data.copy()
+        data['course_id'] = course_pk
+        
+        # Set default order if not provided
+        if 'order' not in data:
+            last_module = CourseModule.objects.filter(course=course).order_by('-order').first()
+            data['order'] = (last_module.order + 1) if last_module else 1
+        
+        serializer = self.get_serializer(data=data)
         if serializer.is_valid():
-            module = serializer.save(course=course)
+            module = serializer.save()
             
             # Log the action
             AdminAuditLogger.log_action(
@@ -909,14 +1010,16 @@ class AdminCourseModuleViewSet(viewsets.ModelViewSet):
                 details={
                     'course_title': course.title,
                     'module_title': module.title,
+                    'order': module.order,
                 },
                 request=request
             )
             
             return Response(
-                CourseModuleSerializer(module).data,
+                AdminCourseModuleSerializer(module).data,
                 status=status.HTTP_201_CREATED
             )
+        print(f"Serializer errors: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 # ==================== Course Management Enhanced Views ====================

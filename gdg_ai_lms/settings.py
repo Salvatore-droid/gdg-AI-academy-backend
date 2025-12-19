@@ -103,6 +103,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:8080",
+    'https://gdg-ai-academy.onrender.com'
 ]
 
 # CORS settings
@@ -113,6 +114,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:8080",
+    'https://gdg-ai-academy.onrender.com'
 ]
 
 # Allow all origins in development (optional)

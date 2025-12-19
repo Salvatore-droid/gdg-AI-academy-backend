@@ -165,6 +165,9 @@ class CourseModule(models.Model):
     video_url = models.URLField(blank=True, null=True)
     content = models.TextField(blank=True)  # HTML content or markdown
     created_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
 
     class Meta:
         db_table = 'course_modules'

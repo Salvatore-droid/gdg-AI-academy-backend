@@ -245,30 +245,51 @@ class CourseDetailSerializer(serializers.ModelSerializer):
 class AdminCourseModuleSerializer(serializers.ModelSerializer):
     course = serializers.CharField(source='course.title', read_only=True)
     course_id = serializers.UUIDField(source='course.id', read_only=True)
-    lesson_count = serializers.SerializerMethodField()
+    # lesson_count = serializers.SerializerMethodField()
     total_duration = serializers.SerializerMethodField()
     
     class Meta:
         model = CourseModule
         fields = [
             'id', 'title', 'description', 'course', 'course_id',
-            'order', 'duration_minutes', 'content_type', 'content_url',
-            'is_active', 'created_at', 'updated_at', 'lesson_count', 'total_duration'
+            'order', 'duration_minutes', 'video_url',
+            'is_active', 'created_at', 'updated_at', 'total_duration'
         ]
     
-    def get_lesson_count(self, obj):
-        return obj.lessons.count()
+    # def get_lesson_count(self, obj):
+    #     return obj.lessons.count()
     
     def get_total_duration(self, obj):
         return obj.duration_minutes
 
+# adminapp/serializers.py - Update CourseModuleCreateSerializer
+
+# adminapp/serializers.py - Update CourseModuleCreateSerializer
+
 class CourseModuleCreateSerializer(serializers.ModelSerializer):
+    course_id = serializers.UUIDField(write_only=True, required=True)
+    
     class Meta:
         model = CourseModule
         fields = [
-            'title', 'description', 'order', 'duration_minutes',
-            'content_type', 'content_url', 'is_active'
+            'title', 'description', 'order', 'duration_minutes', 
+            'video_url', 'is_active', 'course_id'
         ]
+        extra_kwargs = {
+            'title': {'required': True},
+            'description': {'required': True},
+            'order': {'required': True, 'min_value': 1},
+            'duration_minutes': {'required': True, 'min_value': 1},
+        }
+    
+    def create(self, validated_data):
+        """Create module with course association"""
+        course_id = validated_data.pop('course_id')
+        try:
+            course = Course.objects.get(id=course_id)
+            return CourseModule.objects.create(course=course, **validated_data)
+        except Course.DoesNotExist:
+            raise serializers.ValidationError({'course_id': 'Course not found'})
 
 from base.models import Discussion, CommunityEvent, EventAttendance
 

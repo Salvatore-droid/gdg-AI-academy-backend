@@ -26,6 +26,17 @@ urlpatterns = [
     # Dashboard
     path('dashboard/', views.AdminDashboardView.as_view(), name='admin-dashboard'),
     path('dashboard/course-stats/', views.AdminCourseStatsView.as_view(), name='admin-course-stats'),
+    path('courses/<uuid:course_pk>/modules/', views.AdminCourseModuleViewSet.as_view({
+        'get': 'list',
+        'post': 'create'
+    }), name='course-modules-list'),
+    
+    path('courses/<uuid:course_pk>/modules/<uuid:pk>/', views.AdminCourseModuleViewSet.as_view({
+        'get': 'retrieve',
+        'put': 'update',
+        'patch': 'partial_update',
+        'delete': 'destroy'
+    }), name='course-module-detail'),
 
     path('modules/stats/', views.ModuleStatsView.as_view(), name='module-stats'),
 
